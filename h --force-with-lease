@@ -1,9 +1,0 @@
-[33m6a768e0[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m docs: add Japanese README and English README
-[33md76ee74[m docs: update README
-[33mb3ab333[m docs: update README
-[33mf1e0eac[m chore: rename image to miku.jpg
-[33mce81418[m feat: add bot files
-[33m48f288c[m docs: rename project and refine README
-[33md1c0b56[m feat: move whitelist to SQLite and update messages
-[33mb1e6263[m feat: initial bot setup and docs
-[33mf34a5fd[m chore: initial commit
