@@ -41,13 +41,7 @@ KICK_UNDER_DAYS=30
 
 ## 招待リンク
 ```
-!invite
 /invite
-```
-
-## 寄付リンク
-```
-!donate
 /donate
 ```
 
