@@ -46,7 +46,7 @@ Only users with ban/kick permissions can use:
 /whitelist remove user:@user
 /whitelist list
 ```
-Saved to `data/whitelist.json`.
+Saved to `data/whitelist.db` (SQLite).
 
 ## Run
 ```bash

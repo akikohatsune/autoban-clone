@@ -1,5 +1,6 @@
 import os
 import json
+import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import discord
@@ -46,23 +47,47 @@ def _save_log_channel_id(path: Path, channel_id: int) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
-def _load_whitelist(path: Path) -> set[int]:
-    if not path.exists():
-        return set()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return set()
-    ids = data.get("whitelist", [])
-    if not isinstance(ids, list):
-        return set()
-    return {int(x) for x in ids if isinstance(x, int) or str(x).isdigit()}
-
-
-def _save_whitelist(path: Path, whitelist: set[int]) -> None:
+def _db_path() -> Path:
+    path = Path("data") / "whitelist.db"
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"whitelist": sorted(whitelist)}
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    return path
+
+
+def _init_db(path: Path) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS whitelist (user_id INTEGER PRIMARY KEY)"
+        )
+        conn.commit()
+
+
+def _whitelist_all(path: Path) -> list[int]:
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute("SELECT user_id FROM whitelist ORDER BY user_id").fetchall()
+    return [int(r[0]) for r in rows]
+
+
+def _whitelist_has(path: Path, user_id: int) -> bool:
+    with sqlite3.connect(path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM whitelist WHERE user_id = ? LIMIT 1", (user_id,)
+        ).fetchone()
+    return row is not None
+
+
+def _whitelist_add(path: Path, user_id: int) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO whitelist (user_id) VALUES (?)", (user_id,)
+        )
+        conn.commit()
+
+
+def _whitelist_remove(path: Path, user_id: int) -> bool:
+    with sqlite3.connect(path) as conn:
+        cur = conn.execute("DELETE FROM whitelist WHERE user_id = ?", (user_id,))
+        conn.commit()
+    return cur.rowcount > 0
 
 
 def _can_moderate(ctx: commands.Context) -> bool:
@@ -83,11 +108,11 @@ class Moderation(commands.Cog):
         self.ban_under_days = _int_env("BAN_UNDER_DAYS", 7)
         self.kick_under_days = _int_env("KICK_UNDER_DAYS", 30)
         self.config_path = Path("data") / "log_channel.json"
-        self.whitelist_path = Path("data") / "whitelist.json"
         self.log_channel_id = _load_log_channel_id(self.config_path) or _log_channel_id()
-        self.whitelist = _load_whitelist(self.whitelist_path)
+        self.whitelist_db = _db_path()
+        _init_db(self.whitelist_db)
         self.app_whitelist = app_commands.Group(
-            name="whitelist", description="Quản lý whitelist"
+            name="whitelist", description="ホワイトリスト管理 / Manage whitelist"
         )
         self.app_whitelist.add_command(self._app_whitelist_add)
         self.app_whitelist.add_command(self._app_whitelist_remove)
@@ -104,6 +129,41 @@ class Moderation(commands.Cog):
         if isinstance(channel, discord.TextChannel):
             await channel.send(embed=embed)
 
+    async def cog_command_error(
+        self, ctx: commands.Context, error: commands.CommandError
+    ) -> None:
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.send(
+                embed=self._embed(
+                    "権限が必要 / Permission Required",
+                    "このコマンドを使うには必要な権限がありません。\nYou do not have the required permissions for this command.",
+                    0xEF4444,
+                )
+            )
+
+    async def cog_app_command_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ) -> None:
+        if isinstance(error, app_commands.CheckFailure):
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    embed=self._embed(
+                        "権限が必要 / Permission Required",
+                        "このコマンドを使うには必要な権限がありません。\nYou do not have the required permissions for this command.",
+                        0xEF4444,
+                    ),
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    embed=self._embed(
+                        "権限が必要 / Permission Required",
+                        "このコマンドを使うには必要な権限がありません。\nYou do not have the required permissions for this command.",
+                        0xEF4444,
+                    ),
+                    ephemeral=True,
+                )
+
     @commands.hybrid_command(name="setlog")
     @commands.has_permissions(manage_guild=True)
     async def set_log_channel(
@@ -112,8 +172,8 @@ class Moderation(commands.Cog):
         self.log_channel_id = channel.id
         _save_log_channel_id(self.config_path, channel.id)
         embed = self._embed(
-            "Log Channel Set",
-            f"Log channel set to {channel.mention}.",
+            "ログチャンネル設定 / Log Channel Set",
+            f"ログチャンネルを {channel.mention} に設定しました。\nLog channel set to {channel.mention}.",
             0x3B82F6,
         )
         await ctx.send(embed=embed)
@@ -123,20 +183,29 @@ class Moderation(commands.Cog):
         if not _can_moderate(ctx):
             await ctx.send(
                 embed=self._embed(
-                    "Permission Required",
-                    "You need ban or kick permissions to use this command.",
+                    "権限が必要 / Permission Required",
+                    "このコマンドを使うにはBANまたはKICK権限が必要です。\nYou need ban or kick permissions to use this command.",
                     0xEF4444,
                 )
             )
             return
-        if not self.whitelist:
+        ids = _whitelist_all(self.whitelist_db)
+        if not ids:
             await ctx.send(
-                embed=self._embed("Whitelist", "Whitelist is empty.", 0x64748B)
+                embed=self._embed(
+                    "ホワイトリスト / Whitelist",
+                    "ホワイトリストは空です。\nWhitelist is empty.",
+                    0x64748B,
+                )
             )
             return
-        ids = ", ".join(str(x) for x in sorted(self.whitelist))
+        ids = ", ".join(str(x) for x in ids)
         await ctx.send(
-            embed=self._embed("Whitelist IDs", ids, 0x64748B)
+            embed=self._embed(
+                "ホワイトリストID / Whitelist IDs",
+                f"{ids}",
+                0x64748B,
+            )
         )
 
     @whitelist_group.command(name="add")
@@ -144,18 +213,17 @@ class Moderation(commands.Cog):
         if not _can_moderate(ctx):
             await ctx.send(
                 embed=self._embed(
-                    "Permission Required",
-                    "You need ban or kick permissions to use this command.",
+                    "権限が必要 / Permission Required",
+                    "このコマンドを使うにはBANまたはKICK権限が必要です。\nYou need ban or kick permissions to use this command.",
                     0xEF4444,
                 )
             )
             return
-        self.whitelist.add(user_id)
-        _save_whitelist(self.whitelist_path, self.whitelist)
+        _whitelist_add(self.whitelist_db, user_id)
         await ctx.send(
             embed=self._embed(
-                "Whitelist Updated",
-                f"Added `{user_id}` to whitelist.",
+                "ホワイトリスト更新 / Whitelist Updated",
+                f"ホワイトリストに `{user_id}` を追加しました。\nAdded `{user_id}` to whitelist.",
                 0x22C55E,
             )
         )
@@ -165,27 +233,25 @@ class Moderation(commands.Cog):
         if not _can_moderate(ctx):
             await ctx.send(
                 embed=self._embed(
-                    "Permission Required",
-                    "You need ban or kick permissions to use this command.",
+                    "権限が必要 / Permission Required",
+                    "このコマンドを使うにはBANまたはKICK権限が必要です。\nYou need ban or kick permissions to use this command.",
                     0xEF4444,
                 )
             )
             return
-        if user_id in self.whitelist:
-            self.whitelist.remove(user_id)
-            _save_whitelist(self.whitelist_path, self.whitelist)
+        if _whitelist_remove(self.whitelist_db, user_id):
             await ctx.send(
                 embed=self._embed(
-                    "Whitelist Updated",
-                    f"Removed `{user_id}` from whitelist.",
+                    "ホワイトリスト更新 / Whitelist Updated",
+                    f"ホワイトリストから `{user_id}` を削除しました。\nRemoved `{user_id}` from whitelist.",
                     0xF59E0B,
                 )
             )
         else:
             await ctx.send(
                 embed=self._embed(
-                    "Whitelist",
-                    "This ID is not in the whitelist.",
+                    "ホワイトリスト / Whitelist",
+                    "このIDはホワイトリストにありません。\nThis ID is not in the whitelist.",
                     0x64748B,
                 )
             )
@@ -195,48 +261,56 @@ class Moderation(commands.Cog):
         if not _can_moderate(ctx):
             await ctx.send(
                 embed=self._embed(
-                    "Permission Required",
-                    "You need ban or kick permissions to use this command.",
+                    "権限が必要 / Permission Required",
+                    "このコマンドを使うにはBANまたはKICK権限が必要です。\nYou need ban or kick permissions to use this command.",
                     0xEF4444,
                 )
             )
             return
-        if not self.whitelist:
+        ids = _whitelist_all(self.whitelist_db)
+        if not ids:
             await ctx.send(
-                embed=self._embed("Whitelist", "Whitelist is empty.", 0x64748B)
+                embed=self._embed(
+                    "ホワイトリスト / Whitelist",
+                    "ホワイトリストは空です。\nWhitelist is empty.",
+                    0x64748B,
+                )
             )
             return
-        ids = ", ".join(str(x) for x in sorted(self.whitelist))
-        await ctx.send(embed=self._embed("Whitelist IDs", ids, 0x64748B))
+        ids = ", ".join(str(x) for x in ids)
+        await ctx.send(
+            embed=self._embed(
+                "ホワイトリストID / Whitelist IDs",
+                f"{ids}",
+                0x64748B,
+            )
+        )
 
-    @app_commands.command(name="add", description="Thêm user vào whitelist")
+    @app_commands.command(name="add", description="ユーザーを追加 / Add user")
     @app_commands.check(_app_can_moderate)
     async def _app_whitelist_add(
         self, interaction: discord.Interaction, user: discord.User
     ) -> None:
-        self.whitelist.add(user.id)
-        _save_whitelist(self.whitelist_path, self.whitelist)
+        _whitelist_add(self.whitelist_db, user.id)
         await interaction.response.send_message(
             embed=self._embed(
-                "Whitelist Updated",
-                f"Added {user} (ID: {user.id}) to whitelist.",
+                "ホワイトリスト更新 / Whitelist Updated",
+                f"ホワイトリストに {user} (ID: {user.id}) を追加しました。\nAdded {user} (ID: {user.id}) to whitelist.",
                 0x22C55E,
             ),
             ephemeral=True,
         )
 
-    @app_commands.command(name="remove", description="Xóa user khỏi whitelist")
+    @app_commands.command(name="remove", description="ユーザーを削除 / Remove user")
     @app_commands.check(_app_can_moderate)
     async def _app_whitelist_remove(
         self, interaction: discord.Interaction, user: discord.User
     ) -> None:
-        if user.id in self.whitelist:
-            self.whitelist.remove(user.id)
-            _save_whitelist(self.whitelist_path, self.whitelist)
+        if _whitelist_remove(self.whitelist_db, user.id):
             await interaction.response.send_message(
                 embed=self._embed(
-                    "Whitelist Updated",
-                    f"Removed {user} (ID: {user.id}) from whitelist.",
+                    "ホワイトリスト更新 / Whitelist Updated",
+                    f"ホワイトリストから {user} (ID: {user.id}) を削除しました。\nRemoved {user} (ID: {user.id}) from whitelist.",
                     0xF59E0B,
                 ),
                 ephemeral=True,
@@ -244,25 +318,35 @@ class Moderation(commands.Cog):
         else:
             await interaction.response.send_message(
                 embed=self._embed(
-                    "Whitelist",
-                    "This user is not in the whitelist.",
+                    "ホワイトリスト / Whitelist",
+                    "このユーザーはホワイトリストにありません。\nThis user is not in the whitelist.",
                     0x64748B,
                 ),
                 ephemeral=True,
             )
 
-    @app_commands.command(name="list", description="Xem danh sách whitelist")
+    @app_commands.command(name="list", description="一覧表示 / List whitelist")
     @app_commands.check(_app_can_moderate)
     async def _app_whitelist_list(self, interaction: discord.Interaction) -> None:
-        if not self.whitelist:
+        ids = _whitelist_all(self.whitelist_db)
+        if not ids:
             await interaction.response.send_message(
-                embed=self._embed("Whitelist", "Whitelist is empty.", 0x64748B),
+                embed=self._embed(
+                    "ホワイトリスト / Whitelist",
+                    "ホワイトリストは空です。\nWhitelist is empty.",
+                    0x64748B,
+                ),
                 ephemeral=True,
             )
             return
-        ids = ", ".join(str(x) for x in sorted(self.whitelist))
+        ids = ", ".join(str(x) for x in ids)
         await interaction.response.send_message(
-            embed=self._embed("Whitelist IDs", ids, 0x64748B), ephemeral=True
+            embed=self._embed(
+                "ホワイトリストID / Whitelist IDs",
+                f"{ids}",
+                0x64748B,
+            ),
+            ephemeral=True,
         )
 
     @commands.Cog.listener()
@@ -271,7 +355,7 @@ class Moderation(commands.Cog):
         if member.bot:
             return
         # Skip whitelisted IDs
-        if member.id in self.whitelist:
+        if _whitelist_has(self.whitelist_db, member.id):
             return
 
         now = datetime.now(timezone.utc)
@@ -290,8 +374,8 @@ class Moderation(commands.Cog):
                 try:
                     await member.send(
                         embed=self._embed(
-                            "Banned",
-                            f"You were banned from {member.guild.name}.\nReason: {reason}",
+                            "BANされました / Banned",
+                            f"{member.guild.name} からBANされました。\n理由: {reason}\nYou were banned from {member.guild.name}.\nReason: {reason}",
                             0xEF4444,
                         )
                     )
@@ -301,8 +385,8 @@ class Moderation(commands.Cog):
                 await self._log(
                     member.guild,
                     self._embed(
-                        "User Banned",
-                        f"{member} (ID: {member.id})\nReason: {reason}",
+                        "ユーザーBAN / User Banned",
+                        f"{member} (ID: {member.id})\n理由: {reason}\nReason: {reason}",
                         0xEF4444,
                     ),
                 )
@@ -316,8 +400,8 @@ class Moderation(commands.Cog):
                 try:
                     await member.send(
                         embed=self._embed(
-                            "Kicked",
-                            f"You were kicked from {member.guild.name}.\nReason: {reason}",
+                            "KICKされました / Kicked",
+                            f"{member.guild.name} からKICKされました。\n理由: {reason}\nYou were kicked from {member.guild.name}.\nReason: {reason}",
                             0xF59E0B,
                         )
                     )
@@ -327,8 +411,8 @@ class Moderation(commands.Cog):
                 await self._log(
                     member.guild,
                     self._embed(
-                        "User Kicked",
-                        f"{member} (ID: {member.id})\nReason: {reason}",
+                        "ユーザーKICK / User Kicked",
+                        f"{member} (ID: {member.id})\n理由: {reason}\nReason: {reason}",
                         0xF59E0B,
                     ),
                 )
@@ -336,8 +420,8 @@ class Moderation(commands.Cog):
             await self._log(
                 member.guild,
                 self._embed(
-                    "Permission Error",
-                    f"Missing permissions to moderate {member} (ID: {member.id}).",
+                    "権限エラー / Permission Error",
+                    f"{member} (ID: {member.id}) を処理する権限がありません。\nMissing permissions to moderate {member} (ID: {member.id}).",
                     0xEF4444,
                 ),
             )
@@ -345,8 +429,8 @@ class Moderation(commands.Cog):
             await self._log(
                 member.guild,
                 self._embed(
-                    "Moderation Error",
-                    f"Failed to moderate {member} (ID: {member.id}): {exc}",
+                    "モデレーションエラー / Moderation Error",
+                    f"{member} (ID: {member.id}) の処理に失敗しました: {exc}\nFailed to moderate {member} (ID: {member.id}): {exc}",
                     0xEF4444,
                 ),
             )
