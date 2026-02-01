@@ -1,5 +1,7 @@
 # MikuAutoban (dreamexploited)
 
+![Miku](miku.jpg)
+
 This is Miku with a cute but serious Discord bot (discord.py) that auto-bans very new accounts and auto-kicks newer ones. It also sends a friendly embed DM before action.
 
 ## Requirements
@@ -33,6 +35,8 @@ Set the log channel in your server (requires Manage Server). Prefix or slash:
 /setlog #channel-name
 ```
 Saved to `data/log_channel.json`.
+
+![Miku](miku.jpg)
 
 ## Whitelist (bypass ban/kick)
 Only users with ban/kick permissions can use:
