@@ -36,8 +36,6 @@ Set the log channel in your server (requires Manage Server). Prefix or slash:
 ```
 Saved to `data/log_channel.json`.
 
-![Miku](miku.jpg)
-
 ## Whitelist (bypass ban/kick)
 Only users with ban/kick permissions can use:
 ```
