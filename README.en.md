@@ -41,13 +41,11 @@ Saved to `data/log_channel.json`.
 
 ## Invite Link
 ```
-!invite
 /invite
 ```
 
 ## Donate Link
 ```
-!donate
 /donate
 ```
 
