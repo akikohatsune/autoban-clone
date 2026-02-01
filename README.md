@@ -4,6 +4,8 @@
 
 ![Miku](miku.jpg)
 
+Art by [gomya0_0](https://x.com/gomya0_0)
+
 これは、かわいいけれど真面目なDiscordボット（discord.py）です。新しすぎるアカウントは自動BAN、少し新しいアカウントは自動KICKします。実行前にフレンドリーな埋め込みDMを送ります（DMが開放されている場合）。
 
 ## 必要条件
