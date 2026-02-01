@@ -1,6 +1,6 @@
-# autoban-clone (Miku Style)
+# MikuAutoban (dreamexploited)
 
-Konnichiwa~! This is a cute but serious Discord bot (discord.py + cogs) that auto-bans very new accounts and auto-kicks newer ones. It also sends a friendly embed DM before action (if DMs are open).
+This is Miku with a cute but serious Discord bot (discord.py) that auto-bans very new accounts and auto-kicks newer ones. It also sends a friendly embed DM before action.
 
 ## Requirements
 - Python 3.13 (or 3.10+)
@@ -55,3 +55,5 @@ python main.py
 
 ## Permissions
 The bot needs `Ban Members`, `Kick Members`, and read/send permissions in the log channel.
+
+## have a good day!
