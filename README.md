@@ -31,7 +31,6 @@ KICK_UNDER_DAYS=30
 - `LOG_CHANNEL_ID`（任意）: ログ出力先チャンネル
 - `BAN_UNDER_DAYS`: この日数より新しいアカウントはBAN
 - `KICK_UNDER_DAYS`: この日数より新しいアカウントはKICK
-
 ## ログチャンネル
 サーバー内でログチャンネルを設定（Manage Server 権限が必要）。prefix または slash:
 ```
@@ -39,6 +38,18 @@ KICK_UNDER_DAYS=30
 /setlog #channel-name
 ```
 `data/log_channel.json` に保存されます。
+
+## 招待リンク
+```
+!invite
+/invite
+```
+
+## 寄付リンク
+```
+!donate
+/donate
+```
 
 ## ホワイトリスト（BAN/KICK回避）
 BAN/KICK 権限を持つユーザーのみ使用可能:

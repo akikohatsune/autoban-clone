@@ -31,7 +31,6 @@ KICK_UNDER_DAYS=30
 - `LOG_CHANNEL_ID` (optional): where Miku logs actions.
 - `BAN_UNDER_DAYS`: accounts younger than this get banned.
 - `KICK_UNDER_DAYS`: accounts younger than this get kicked.
-
 ## Log Channel
 Set the log channel in your server (requires Manage Server). Prefix or slash:
 ```
@@ -39,6 +38,18 @@ Set the log channel in your server (requires Manage Server). Prefix or slash:
 /setlog #channel-name
 ```
 Saved to `data/log_channel.json`.
+
+## Invite Link
+```
+!invite
+/invite
+```
+
+## Donate Link
+```
+!donate
+/donate
+```
 
 ## Whitelist (bypass ban/kick)
 Only users with ban/kick permissions can use:

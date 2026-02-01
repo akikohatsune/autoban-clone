@@ -16,6 +16,7 @@ def _require_env(name: str) -> str:
 class AutoBanBot(commands.Bot):
     async def setup_hook(self) -> None:
         await self.load_extension("cogs.moderation")
+        await self.load_extension("cogs.invite")
         await self.tree.sync()
 
 
