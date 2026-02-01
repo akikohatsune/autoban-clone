@@ -4,6 +4,8 @@ English | [日本語](README.md)
 
 ![Miku](miku.jpg)
 
+Art by [gomya0_0](https://x.com/gomya0_0)
+
 This is Miku with a cute but serious Discord bot (discord.py) that auto-bans very new accounts and auto-kicks newer ones. It also sends a friendly embed DM before action.
 
 ## Requirements
