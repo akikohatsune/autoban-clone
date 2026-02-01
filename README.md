@@ -38,8 +38,6 @@ KICK_UNDER_DAYS=30
 ```
 `data/log_channel.json` に保存されます。
 
-![Miku](miku.jpg)
-
 ## ホワイトリスト（BAN/KICK回避）
 BAN/KICK 権限を持つユーザーのみ使用可能:
 ```
