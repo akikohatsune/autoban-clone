@@ -126,6 +126,34 @@ class Moderation(commands.Cog):
         if isinstance(channel, discord.TextChannel):
             await channel.send(embed=embed)
 
+    async def _notify_permission_issue(
+        self, guild: discord.Guild, member: discord.Member
+    ) -> None:
+        embed = self._embed(
+            "権限エラー / Permission Error",
+            (
+                f"{member} (ID: {member.id}) を処理できませんでした。\n"
+                "BOTのロール位置と権限を確認してください。\n"
+                "I could not moderate this member.\n"
+                "Please check the bot's role position and permissions."
+            ),
+            0xEF4444,
+        )
+        if self.log_channel_id:
+            await self._log(guild, embed)
+            return
+        owner = guild.owner
+        if owner is None:
+            try:
+                owner = await guild.fetch_member(guild.owner_id)
+            except (discord.Forbidden, discord.HTTPException):
+                owner = None
+        if owner is not None:
+            try:
+                await owner.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
     async def cog_command_error(
         self, ctx: commands.Context, error: commands.CommandError
     ) -> None:
@@ -414,14 +442,7 @@ class Moderation(commands.Cog):
                     ),
                 )
         except discord.Forbidden:
-            await self._log(
-                member.guild,
-                self._embed(
-                    "権限エラー / Permission Error",
-                    f"{member} (ID: {member.id}) を処理する権限がありません。\nMissing permissions to moderate {member} (ID: {member.id}).",
-                    0xEF4444,
-                ),
-            )
+            await self._notify_permission_issue(member.guild, member)
         except discord.HTTPException as exc:
             await self._log(
                 member.guild,
@@ -431,6 +452,37 @@ class Moderation(commands.Cog):
                     0xEF4444,
                 ),
             )
+
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        embed = self._embed(
+            "Xin chào! / Welcome!",
+            (
+                "Cảm ơn đã mời bot.\n"
+                "Hãy dùng `setlog #kenh` để đặt kênh log.\n"
+                "Vui lòng kiểm tra bot có quyền BAN/KICK và role cao hơn member cần xử lý.\n"
+                "Thanks for inviting me. Use `setlog #channel` to set a log channel."
+            ),
+            0x3B82F6,
+        )
+        target = None
+        if self.log_channel_id:
+            target = guild.get_channel(self.log_channel_id)
+        if isinstance(target, discord.TextChannel):
+            await target.send(embed=embed)
+        elif isinstance(guild.system_channel, discord.TextChannel):
+            await guild.system_channel.send(embed=embed)
+        owner = guild.owner
+        if owner is None:
+            try:
+                owner = await guild.fetch_member(guild.owner_id)
+            except (discord.Forbidden, discord.HTTPException):
+                owner = None
+        if owner is not None:
+            try:
+                await owner.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 
 async def setup(bot: commands.Bot) -> None:
