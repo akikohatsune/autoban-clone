@@ -117,7 +117,8 @@ class Moderation(commands.Cog):
         self.app_whitelist.add_command(self._app_whitelist_add)
         self.app_whitelist.add_command(self._app_whitelist_remove)
         self.app_whitelist.add_command(self._app_whitelist_list)
-        self.bot.tree.add_command(self.app_whitelist)
+        if not self.bot.tree.get_command("whitelist"):
+            self.bot.tree.add_command(self.app_whitelist)
 
     def _embed(self, title: str, description: str, color: int) -> discord.Embed:
         return discord.Embed(title=title, description=description, color=color)
