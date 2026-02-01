@@ -103,6 +103,10 @@ def _app_can_moderate(interaction: discord.Interaction) -> bool:
 
 
 class Moderation(commands.Cog):
+    whitelist_app = app_commands.Group(
+        name="whitelist", description="ホワイトリスト管理 / Manage whitelist"
+    )
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.ban_under_days = _int_env("BAN_UNDER_DAYS", 7)
@@ -111,14 +115,6 @@ class Moderation(commands.Cog):
         self.log_channel_id = _load_log_channel_id(self.config_path) or _log_channel_id()
         self.whitelist_db = _db_path()
         _init_db(self.whitelist_db)
-        self.app_whitelist = app_commands.Group(
-            name="whitelist", description="ホワイトリスト管理 / Manage whitelist"
-        )
-        self.app_whitelist.add_command(self._app_whitelist_add)
-        self.app_whitelist.add_command(self._app_whitelist_remove)
-        self.app_whitelist.add_command(self._app_whitelist_list)
-        if not self.bot.tree.get_command("whitelist"):
-            self.bot.tree.add_command(self.app_whitelist)
 
     def _embed(self, title: str, description: str, color: int) -> discord.Embed:
         return discord.Embed(title=title, description=description, color=color)
@@ -287,7 +283,7 @@ class Moderation(commands.Cog):
             )
         )
 
-    @app_commands.command(name="add", description="ユーザーを追加 / Add user")
+    @whitelist_app.command(name="add", description="ユーザーを追加 / Add user")
     @app_commands.check(_app_can_moderate)
     async def _app_whitelist_add(
         self, interaction: discord.Interaction, user: discord.User
@@ -302,7 +298,7 @@ class Moderation(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="remove", description="ユーザーを削除 / Remove user")
+    @whitelist_app.command(name="remove", description="ユーザーを削除 / Remove user")
     @app_commands.check(_app_can_moderate)
     async def _app_whitelist_remove(
         self, interaction: discord.Interaction, user: discord.User
@@ -326,7 +322,7 @@ class Moderation(commands.Cog):
                 ephemeral=True,
             )
 
-    @app_commands.command(name="list", description="一覧表示 / List whitelist")
+    @whitelist_app.command(name="list", description="一覧表示 / List whitelist")
     @app_commands.check(_app_can_moderate)
     async def _app_whitelist_list(self, interaction: discord.Interaction) -> None:
         ids = _whitelist_all(self.whitelist_db)
