@@ -53,10 +53,28 @@ def _db_path() -> Path:
     return path
 
 
+def _settings_db_path() -> Path:
+    path = Path("data") / "settings.db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _init_db(path: Path) -> None:
     with sqlite3.connect(path) as conn:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS whitelist (user_id INTEGER PRIMARY KEY)"
+        )
+        conn.commit()
+
+
+def _init_settings_db(path: Path) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings ("
+            "guild_id INTEGER PRIMARY KEY,"
+            "ban_under_days INTEGER NOT NULL,"
+            "kick_under_days INTEGER NOT NULL"
+            ")"
         )
         conn.commit()
 
@@ -90,6 +108,40 @@ def _whitelist_remove(path: Path, user_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def _settings_get(
+    path: Path, guild_id: int, default_ban_days: int, default_kick_days: int
+) -> tuple[int, int]:
+    with sqlite3.connect(path) as conn:
+        row = conn.execute(
+            "SELECT ban_under_days, kick_under_days FROM settings WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+        if row is not None:
+            return int(row[0]), int(row[1])
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (guild_id, ban_under_days, kick_under_days)"
+            " VALUES (?, ?, ?)",
+            (guild_id, default_ban_days, default_kick_days),
+        )
+        conn.commit()
+    return default_ban_days, default_kick_days
+
+
+def _settings_set(path: Path, guild_id: int, ban_days: int, kick_days: int) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (guild_id, ban_under_days, kick_under_days)"
+            " VALUES (?, ?, ?)",
+            (guild_id, ban_days, kick_days),
+        )
+        conn.execute(
+            "UPDATE settings SET ban_under_days = ?, kick_under_days = ?"
+            " WHERE guild_id = ?",
+            (ban_days, kick_days, guild_id),
+        )
+        conn.commit()
+
+
 def _can_moderate(ctx: commands.Context) -> bool:
     perms = ctx.author.guild_permissions
     return perms.ban_members or perms.kick_members
@@ -109,12 +161,14 @@ class Moderation(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.ban_under_days = _int_env("BAN_UNDER_DAYS", 7)
-        self.kick_under_days = _int_env("KICK_UNDER_DAYS", 30)
+        self.default_ban_under_days = _int_env("BAN_UNDER_DAYS", 7)
+        self.default_kick_under_days = _int_env("KICK_UNDER_DAYS", 30)
         self.config_path = Path("data") / "log_channel.json"
         self.log_channel_id = _load_log_channel_id(self.config_path) or _log_channel_id()
         self.whitelist_db = _db_path()
+        self.settings_db = _settings_db_path()
         _init_db(self.whitelist_db)
+        _init_settings_db(self.settings_db)
 
     def _embed(self, title: str, description: str, color: int) -> discord.Embed:
         return discord.Embed(title=title, description=description, color=color)
@@ -157,7 +211,9 @@ class Moderation(commands.Cog):
     async def cog_command_error(
         self, ctx: commands.Context, error: commands.CommandError
     ) -> None:
-        if isinstance(error, commands.MissingPermissions):
+        if isinstance(error, commands.MissingPermissions) or isinstance(
+            error, commands.CheckFailure
+        ):
             await ctx.send(
                 embed=self._embed(
                     "権限が必要 / Permission Required",
@@ -202,6 +258,89 @@ class Moderation(commands.Cog):
             0x3B82F6,
         )
         await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name="banday")
+    @commands.check(_can_moderate)
+    @app_commands.check(_app_can_moderate)
+    async def set_ban_days(self, ctx: commands.Context, days: int) -> None:
+        if ctx.guild is None:
+            return
+        if days < 0:
+            await ctx.send(
+                embed=self._embed(
+                    "不正な値 / Invalid Value",
+                    "0以上の数値を指定してください。\nPlease provide a non-negative number.",
+                    0xEF4444,
+                )
+            )
+            return
+        _, kick_days = _settings_get(
+            self.settings_db,
+            ctx.guild.id,
+            self.default_ban_under_days,
+            self.default_kick_under_days,
+        )
+        _settings_set(self.settings_db, ctx.guild.id, days, kick_days)
+        await ctx.send(
+            embed=self._embed(
+                "BAN日数設定 / Ban Days Set",
+                f"BANの対象日数を `{days}` 日に設定しました。\nSet ban threshold to `{days}` days.",
+                0x22C55E,
+            )
+        )
+
+    @commands.hybrid_command(name="kickday")
+    @commands.check(_can_moderate)
+    @app_commands.check(_app_can_moderate)
+    async def set_kick_days(self, ctx: commands.Context, days: int) -> None:
+        if ctx.guild is None:
+            return
+        if days < 0:
+            await ctx.send(
+                embed=self._embed(
+                    "不正な値 / Invalid Value",
+                    "0以上の数値を指定してください。\nPlease provide a non-negative number.",
+                    0xEF4444,
+                )
+            )
+            return
+        ban_days, _ = _settings_get(
+            self.settings_db,
+            ctx.guild.id,
+            self.default_ban_under_days,
+            self.default_kick_under_days,
+        )
+        _settings_set(self.settings_db, ctx.guild.id, ban_days, days)
+        await ctx.send(
+            embed=self._embed(
+                "KICK日数設定 / Kick Days Set",
+                f"KICKの対象日数を `{days}` 日に設定しました。\nSet kick threshold to `{days}` days.",
+                0x22C55E,
+            )
+        )
+
+    @commands.hybrid_command(name="showday")
+    @commands.check(_can_moderate)
+    @app_commands.check(_app_can_moderate)
+    async def show_days(self, ctx: commands.Context) -> None:
+        if ctx.guild is None:
+            return
+        ban_days, kick_days = _settings_get(
+            self.settings_db,
+            ctx.guild.id,
+            self.default_ban_under_days,
+            self.default_kick_under_days,
+        )
+        await ctx.send(
+            embed=self._embed(
+                "現在の設定 / Current Settings",
+                (
+                    f"BAN: `{ban_days}` 日\nKICK: `{kick_days}` 日\n"
+                    f"BAN: `{ban_days}` days\nKICK: `{kick_days}` days"
+                ),
+                0x3B82F6,
+            )
+        )
 
     @commands.group(name="whitelist", invoke_without_command=True)
     async def whitelist_group(self, ctx: commands.Context) -> None:
@@ -387,13 +526,19 @@ class Moderation(commands.Cog):
         age = now - member.created_at
         created_at = member.created_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
-        ban_delta = timedelta(days=self.ban_under_days)
-        kick_delta = timedelta(days=self.kick_under_days)
+        ban_days, kick_days = _settings_get(
+            self.settings_db,
+            member.guild.id,
+            self.default_ban_under_days,
+            self.default_kick_under_days,
+        )
+        ban_delta = timedelta(days=ban_days)
+        kick_delta = timedelta(days=kick_days)
 
         try:
             if age < ban_delta:
                 reason = (
-                    f"Account age {age.days}d < {self.ban_under_days}d "
+                    f"Account age {age.days}d < {ban_days}d "
                     f"(Created: {created_at} UTC)"
                 )
                 try:
@@ -419,7 +564,7 @@ class Moderation(commands.Cog):
 
             if age < kick_delta:
                 reason = (
-                    f"Account age {age.days}d < {self.kick_under_days}d "
+                    f"Account age {age.days}d < {kick_days}d "
                     f"(Created: {created_at} UTC)"
                 )
                 try:
