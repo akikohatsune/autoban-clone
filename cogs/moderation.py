@@ -73,9 +73,22 @@ def _init_settings_db(path: Path) -> None:
             "CREATE TABLE IF NOT EXISTS settings ("
             "guild_id INTEGER PRIMARY KEY,"
             "ban_under_days INTEGER NOT NULL,"
-            "kick_under_days INTEGER NOT NULL"
+            "kick_under_days INTEGER NOT NULL,"
+            "ban_under_seconds INTEGER,"
+            "kick_under_seconds INTEGER"
             ")"
         )
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(settings)").fetchall()
+        }
+        if "ban_under_seconds" not in columns:
+            conn.execute("ALTER TABLE settings ADD COLUMN ban_under_seconds INTEGER")
+        if "kick_under_seconds" not in columns:
+            conn.execute("ALTER TABLE settings ADD COLUMN kick_under_seconds INTEGER")
+        if "ban_under_days" not in columns:
+            conn.execute("ALTER TABLE settings ADD COLUMN ban_under_days INTEGER")
+        if "kick_under_days" not in columns:
+            conn.execute("ALTER TABLE settings ADD COLUMN kick_under_days INTEGER")
         conn.commit()
 
 
@@ -109,35 +122,59 @@ def _whitelist_remove(path: Path, user_id: int) -> bool:
 
 
 def _settings_get(
-    path: Path, guild_id: int, default_ban_days: int, default_kick_days: int
+    path: Path, guild_id: int, default_ban_seconds: int, default_kick_seconds: int
 ) -> tuple[int, int]:
     with sqlite3.connect(path) as conn:
         row = conn.execute(
-            "SELECT ban_under_days, kick_under_days FROM settings WHERE guild_id = ?",
+            "SELECT ban_under_seconds, kick_under_seconds, ban_under_days, kick_under_days "
+            "FROM settings WHERE guild_id = ?",
             (guild_id,),
         ).fetchone()
         if row is not None:
-            return int(row[0]), int(row[1])
+            ban_seconds, kick_seconds, ban_days, kick_days = row
+            if ban_seconds is not None and kick_seconds is not None:
+                return int(ban_seconds), int(kick_seconds)
+            if ban_days is not None and kick_days is not None:
+                ban_seconds = int(ban_days) * 86400
+                kick_seconds = int(kick_days) * 86400
+                conn.execute(
+                    "UPDATE settings SET ban_under_seconds = ?, kick_under_seconds = ? "
+                    "WHERE guild_id = ?",
+                    (ban_seconds, kick_seconds, guild_id),
+                )
+                conn.commit()
+                return ban_seconds, kick_seconds
         conn.execute(
-            "INSERT OR IGNORE INTO settings (guild_id, ban_under_days, kick_under_days)"
-            " VALUES (?, ?, ?)",
-            (guild_id, default_ban_days, default_kick_days),
+            "INSERT OR IGNORE INTO settings "
+            "(guild_id, ban_under_days, kick_under_days, ban_under_seconds, kick_under_seconds)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                guild_id,
+                default_ban_seconds // 86400,
+                default_kick_seconds // 86400,
+                default_ban_seconds,
+                default_kick_seconds,
+            ),
         )
         conn.commit()
-    return default_ban_days, default_kick_days
+    return default_ban_seconds, default_kick_seconds
 
 
-def _settings_set(path: Path, guild_id: int, ban_days: int, kick_days: int) -> None:
+def _settings_set(path: Path, guild_id: int, ban_seconds: int, kick_seconds: int) -> None:
+    ban_days = (ban_seconds + 86399) // 86400
+    kick_days = (kick_seconds + 86399) // 86400
     with sqlite3.connect(path) as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO settings (guild_id, ban_under_days, kick_under_days)"
-            " VALUES (?, ?, ?)",
-            (guild_id, ban_days, kick_days),
+            "INSERT OR IGNORE INTO settings "
+            "(guild_id, ban_under_days, kick_under_days, ban_under_seconds, kick_under_seconds)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (guild_id, ban_days, kick_days, ban_seconds, kick_seconds),
         )
         conn.execute(
-            "UPDATE settings SET ban_under_days = ?, kick_under_days = ?"
+            "UPDATE settings SET ban_under_days = ?, kick_under_days = ?, "
+            "ban_under_seconds = ?, kick_under_seconds = ?"
             " WHERE guild_id = ?",
-            (ban_days, kick_days, guild_id),
+            (ban_days, kick_days, ban_seconds, kick_seconds, guild_id),
         )
         conn.commit()
 
@@ -154,6 +191,50 @@ def _app_can_moderate(interaction: discord.Interaction) -> bool:
     return perms.ban_members or perms.kick_members
 
 
+def _parse_duration(raw: str) -> int | None:
+    value = raw.strip().lower()
+    if not value:
+        return None
+    unit = value[-1]
+    number = value
+    multiplier = 86400
+    if unit.isalpha():
+        number = value[:-1].strip()
+        if unit == "s":
+            multiplier = 1
+        elif unit == "m":
+            multiplier = 60
+        elif unit == "h":
+            multiplier = 3600
+        elif unit == "d":
+            multiplier = 86400
+        elif unit == "w":
+            multiplier = 604800
+        else:
+            return None
+    if not number.isdigit():
+        return None
+    seconds = int(number) * multiplier
+    if seconds < 0:
+        return None
+    return seconds
+
+
+def _humanize_duration(seconds: int) -> str:
+    if seconds <= 0:
+        return "0s"
+    remaining = seconds
+    parts: list[str] = []
+    for unit, size in (("w", 604800), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1)):
+        if remaining >= size:
+            value = remaining // size
+            remaining %= size
+            parts.append(f"{value}{unit}")
+        if len(parts) >= 2:
+            break
+    return " ".join(parts)
+
+
 class Moderation(commands.Cog):
     whitelist_app = app_commands.Group(
         name="whitelist", description="ホワイトリスト管理 / Manage whitelist"
@@ -161,8 +242,8 @@ class Moderation(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-        self.default_ban_under_days = _int_env("BAN_UNDER_DAYS", 7)
-        self.default_kick_under_days = _int_env("KICK_UNDER_DAYS", 30)
+        self.default_ban_under_seconds = _int_env("BAN_UNDER_DAYS", 7) * 86400
+        self.default_kick_under_seconds = _int_env("KICK_UNDER_DAYS", 30) * 86400
         self.config_path = Path("data") / "log_channel.json"
         self.log_channel_id = _load_log_channel_id(self.config_path) or _log_channel_id()
         self.whitelist_db = _db_path()
@@ -262,29 +343,36 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name="banday")
     @commands.check(_can_moderate)
     @app_commands.check(_app_can_moderate)
-    async def set_ban_days(self, ctx: commands.Context, days: int) -> None:
+    async def set_ban_days(self, ctx: commands.Context, duration: str) -> None:
         if ctx.guild is None:
             return
-        if days < 0:
+        seconds = _parse_duration(duration)
+        if seconds is None:
             await ctx.send(
                 embed=self._embed(
                     "不正な値 / Invalid Value",
-                    "0以上の数値を指定してください。\nPlease provide a non-negative number.",
+                    (
+                        "数値+単位を指定してください (例: 7d, 12h, 30m)。\n"
+                        "Please provide a number with unit (e.g. 7d, 12h, 30m)."
+                    ),
                     0xEF4444,
                 )
             )
             return
-        _, kick_days = _settings_get(
+        _, kick_seconds = _settings_get(
             self.settings_db,
             ctx.guild.id,
-            self.default_ban_under_days,
-            self.default_kick_under_days,
+            self.default_ban_under_seconds,
+            self.default_kick_under_seconds,
         )
-        _settings_set(self.settings_db, ctx.guild.id, days, kick_days)
+        _settings_set(self.settings_db, ctx.guild.id, seconds, kick_seconds)
         await ctx.send(
             embed=self._embed(
-                "BAN日数設定 / Ban Days Set",
-                f"BANの対象日数を `{days}` 日に設定しました。\nSet ban threshold to `{days}` days.",
+                "BAN時間設定 / Ban Time Set",
+                (
+                    f"BANの対象時間を `{_humanize_duration(seconds)}` に設定しました。\n"
+                    f"Set ban threshold to `{_humanize_duration(seconds)}`."
+                ),
                 0x22C55E,
             )
         )
@@ -292,29 +380,36 @@ class Moderation(commands.Cog):
     @commands.hybrid_command(name="kickday")
     @commands.check(_can_moderate)
     @app_commands.check(_app_can_moderate)
-    async def set_kick_days(self, ctx: commands.Context, days: int) -> None:
+    async def set_kick_days(self, ctx: commands.Context, duration: str) -> None:
         if ctx.guild is None:
             return
-        if days < 0:
+        seconds = _parse_duration(duration)
+        if seconds is None:
             await ctx.send(
                 embed=self._embed(
                     "不正な値 / Invalid Value",
-                    "0以上の数値を指定してください。\nPlease provide a non-negative number.",
+                    (
+                        "数値+単位を指定してください (例: 7d, 12h, 30m)。\n"
+                        "Please provide a number with unit (e.g. 7d, 12h, 30m)."
+                    ),
                     0xEF4444,
                 )
             )
             return
-        ban_days, _ = _settings_get(
+        ban_seconds, _ = _settings_get(
             self.settings_db,
             ctx.guild.id,
-            self.default_ban_under_days,
-            self.default_kick_under_days,
+            self.default_ban_under_seconds,
+            self.default_kick_under_seconds,
         )
-        _settings_set(self.settings_db, ctx.guild.id, ban_days, days)
+        _settings_set(self.settings_db, ctx.guild.id, ban_seconds, seconds)
         await ctx.send(
             embed=self._embed(
-                "KICK日数設定 / Kick Days Set",
-                f"KICKの対象日数を `{days}` 日に設定しました。\nSet kick threshold to `{days}` days.",
+                "KICK時間設定 / Kick Time Set",
+                (
+                    f"KICKの対象時間を `{_humanize_duration(seconds)}` に設定しました。\n"
+                    f"Set kick threshold to `{_humanize_duration(seconds)}`."
+                ),
                 0x22C55E,
             )
         )
@@ -325,18 +420,20 @@ class Moderation(commands.Cog):
     async def show_days(self, ctx: commands.Context) -> None:
         if ctx.guild is None:
             return
-        ban_days, kick_days = _settings_get(
+        ban_seconds, kick_seconds = _settings_get(
             self.settings_db,
             ctx.guild.id,
-            self.default_ban_under_days,
-            self.default_kick_under_days,
+            self.default_ban_under_seconds,
+            self.default_kick_under_seconds,
         )
         await ctx.send(
             embed=self._embed(
                 "現在の設定 / Current Settings",
                 (
-                    f"BAN: `{ban_days}` 日\nKICK: `{kick_days}` 日\n"
-                    f"BAN: `{ban_days}` days\nKICK: `{kick_days}` days"
+                    f"BAN: `{_humanize_duration(ban_seconds)}`\n"
+                    f"KICK: `{_humanize_duration(kick_seconds)}`\n"
+                    f"BAN: `{_humanize_duration(ban_seconds)}`\n"
+                    f"KICK: `{_humanize_duration(kick_seconds)}`"
                 ),
                 0x3B82F6,
             )
@@ -526,19 +623,19 @@ class Moderation(commands.Cog):
         age = now - member.created_at
         created_at = member.created_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
-        ban_days, kick_days = _settings_get(
+        ban_seconds, kick_seconds = _settings_get(
             self.settings_db,
             member.guild.id,
-            self.default_ban_under_days,
-            self.default_kick_under_days,
+            self.default_ban_under_seconds,
+            self.default_kick_under_seconds,
         )
-        ban_delta = timedelta(days=ban_days)
-        kick_delta = timedelta(days=kick_days)
+        ban_delta = timedelta(seconds=ban_seconds)
+        kick_delta = timedelta(seconds=kick_seconds)
 
         try:
             if age < ban_delta:
                 reason = (
-                    f"Account age {age.days}d < {ban_days}d "
+                    f"Account age {age.days}d < {_humanize_duration(ban_seconds)} "
                     f"(Created: {created_at} UTC)"
                 )
                 try:
@@ -564,7 +661,7 @@ class Moderation(commands.Cog):
 
             if age < kick_delta:
                 reason = (
-                    f"Account age {age.days}d < {kick_days}d "
+                    f"Account age {age.days}d < {_humanize_duration(kick_seconds)} "
                     f"(Created: {created_at} UTC)"
                 )
                 try:

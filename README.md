@@ -39,6 +39,18 @@ KICK_UNDER_DAYS=30
 ```
 `data/log_channel.json` に保存されます。
 
+## サーバーごとのBAN/KICK設定
+サーバーごとにしきい値を変更できます（BAN または KICK 権限が必要）。prefix または slash:
+```
+!banday <duration>
+!kickday <duration>
+!showday
+/banday duration:<duration>
+/kickday duration:<duration>
+/showday
+```
+duration 形式: 数値 + 単位 `s`, `m`, `h`, `d`, `w`（例: `12h`, `7d`）。単位省略時は日数になります。
+
 ## 招待リンク
 ```
 /invite

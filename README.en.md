@@ -39,6 +39,18 @@ Set the log channel in your server (requires Manage Server). Prefix or slash:
 ```
 Saved to `data/log_channel.json`.
 
+## Per-server Ban/Kick Threshold
+Set custom thresholds per server (requires ban or kick permissions). Prefix or slash:
+```
+!banday <duration>
+!kickday <duration>
+!showday
+/banday duration:<duration>
+/kickday duration:<duration>
+/showday
+```
+Duration format: number + unit `s`, `m`, `h`, `d`, `w` (e.g. `12h`, `7d`). If no unit is given, days are assumed.
+
 ## Invite Link
 ```
 /invite
